@@ -11,7 +11,7 @@ pub const std_options: std.Options = .{
     .logFn = coloredLog,
 };
 
-const version = "0.1.0";
+const version = "0.2.0";
 const config_dirname = "nekoweb";
 const config_filename = "config";
 const config_path = switch (builtin.os.tag) {
