@@ -7,12 +7,19 @@ _nk() {
 
     case $state in
     cmd)
-        main_commands=('info\:"Display informations about a Nekoweb website" create\:"Create a new file or directory" upload\:"Upload files to your Nekoweb website" delete\:"Delete file or directory from your Nekoweb website" move\:"Move/Rename a file or directory" list\:"List files from your Nekoweb website" logout\:"Remove your API key from the save file" help\:"Display information about a command" version\:"Display program version"')
+        main_commands=('push\:"Import a whole directory to your Nekoweb website" info\:"Display informations about a Nekoweb website" create\:"Create a new file or directory" upload\:"Upload files to your Nekoweb website" delete\:"Delete file or directory from your Nekoweb website" move\:"Move/Rename a file or directory" list\:"List files from your Nekoweb website" logout\:"Remove your API key from the save file" help\:"Display information about a command" version\:"Display program version"')
         main_commands=($main_commands)
         _alternative "args:command:(($main_commands))"
         ;;
     args)
         case $line[1] in
+        push)
+            _arguments -s \
+                '2:directory:_files' \
+                '--ignore[Ignore a path]' \
+                '--keep-hidden[Keep hidden files]' \
+                '--dry-run[Show what would have been imported]'
+            ;;
         create)
             _arguments -s '2:pathname:' '-d[Create a directory]'
             ;;
@@ -38,7 +45,7 @@ _nk() {
                 "--only-dir[Display only directories]"
             ;;
         help)
-            _arguments -s '2:commands:(info create upload delete move list logout help version)'
+            _arguments -s '2:commands:(push info create upload delete move list logout help version)'
             ;;
         esac
         ;;

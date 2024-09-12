@@ -18,7 +18,7 @@ according to your system. Zsh completions are available [here](_nk).
 
 ### Building
 
-Requires zig 0.13.0.
+Requires zig 0.13.0 and libzip.
 ```
 git clone https://github.com/ratakor/nk
 cd nk
@@ -30,6 +30,7 @@ zig build -Doptimize=ReleaseSafe
 Usage: nk [command] [options]
 
 Commands:
+  push       | Import a whole directory to your Nekoweb website
   info       | Display information about a Nekoweb website
   create     | Create a new file or directory
   upload     | Upload files to your Nekoweb website

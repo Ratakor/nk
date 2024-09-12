@@ -2,6 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const known_folders = @import("known-folders");
 const Nekoweb = @import("Nekoweb.zig");
+const c = @cImport({
+    @cInclude("zip.h");
+});
 
 pub const std_options: std.Options = .{
     .log_level = if (builtin.mode == .Debug) .debug else .info,
@@ -9,7 +12,7 @@ pub const std_options: std.Options = .{
 };
 
 const version = "0.1.0";
-const config_dirname = "nk";
+const config_dirname = "nekoweb";
 const config_filename = "config";
 const config_path = switch (builtin.os.tag) {
     .windows => config_dirname ++ "\\" ++ config_filename,
@@ -20,7 +23,7 @@ const usage =
     \\Usage: {s} [command] [options]
     \\
     \\Commands:
-    // \\  push       | Upload a directory to your Nekoweb website
+    \\  push       | Import a whole directory to your Nekoweb website
     // \\  pull       | Download all files from your Nekoweb website
     \\  info       | Display information about a Nekoweb website
     \\  create     | Create a new file or directory
@@ -32,6 +35,19 @@ const usage =
     \\  logout     | Remove your API key from the save file
     \\  help       | Display information about a command
     \\  version    | Display program version
+    \\
+;
+
+const usage_push =
+    \\Usage: {s} push [flags] [source]
+    \\
+    \\Import a whole directory to your Nekoweb website
+    \\
+    \\Flags:
+    \\  --ignore [path]    Ignore a path
+    \\  --keep-hidden      Keep hidden files
+    \\  --dry-run          Show what would have been imported
+    // \\  --prune            Remove site files not in the source
     \\
 ;
 
@@ -153,16 +169,13 @@ fn coloredLog(
         .debug => Color.bold ++ Color.cyan.toSeq() ++ "debug" ++ Color.reset,
     };
     const scope_prefix = (if (scope != .default) "@" ++ @tagName(scope) else "") ++ ": ";
-    const stderr = std.io.getStdErr().writer();
-    var bw = std.io.bufferedWriter(stderr);
+    var bw = std.io.bufferedWriter(comptime switch (message_level) {
+        .err, .warn, .debug => std.io.getStdErr().writer(),
+        .info => std.io.getStdOut().writer(),
+    });
     const writer = bw.writer();
-
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    nosuspend {
-        writer.print(level_txt ++ scope_prefix ++ format ++ "\n", args) catch return;
-        bw.flush() catch return;
-    }
+    writer.print(level_txt ++ scope_prefix ++ format ++ "\n", args) catch return;
+    bw.flush() catch return;
 }
 
 fn getApiKey(allocator: std.mem.Allocator) ![]const u8 {
@@ -224,6 +237,137 @@ fn getApiKey(allocator: std.mem.Allocator) ![]const u8 {
     std.log.info("Your API key has been saved", .{});
 
     return api_key;
+}
+
+fn walkDirZip(
+    archive: *c.zip_t,
+    allocator: std.mem.Allocator,
+    offset: usize,
+    input_dir: []const u8,
+) !void {
+    const cwd = std.fs.cwd();
+    var dir = try cwd.openDir(input_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |file| {
+        if (push_ignored_files.get(file.name)) |_| {
+            continue;
+        }
+
+        if (!push_keep_hidden) {
+            if (builtin.os.tag == .windows) {
+                // TODO: handle hidden files on Windows
+            } else {
+                if (file.name[0] == '.') {
+                    continue;
+                }
+            }
+        }
+
+        const fullname = try std.fmt.allocPrintZ(allocator, "{s}/{s}", .{ input_dir, file.name });
+        defer allocator.free(fullname);
+
+        if (file.kind == .directory) {
+            if (!push_dry_run) {
+                if (c.zip_dir_add(archive, fullname[offset..].ptr, c.ZIP_FL_ENC_UTF_8) < 0) {
+                    std.log.err("Failed to add directory {s} to zip: {s}", .{
+                        fullname,
+                        c.zip_strerror(archive),
+                    });
+                    std.process.exit(1);
+                }
+            }
+            try walkDirZip(archive, allocator, offset, fullname);
+        } else {
+            std.log.info("Adding {s} to the zip archive", .{fullname[offset..]});
+            if (push_dry_run) {
+                continue;
+            }
+            // TODO: compress files with std.compress.flate.compress?
+            const source = c.zip_source_file(archive, fullname.ptr, 0, 0) orelse {
+                std.log.err("Failed to create zip source for {s}: {s}", .{
+                    fullname,
+                    c.zip_strerror(archive),
+                });
+                std.process.exit(1);
+            };
+            if (c.zip_file_add(archive, fullname[offset..].ptr, source, c.ZIP_FL_ENC_UTF_8) < 0) {
+                c.zip_source_free(source);
+                std.log.err("Failed to add file {s} to zip: {s}", .{
+                    fullname,
+                    c.zip_strerror(archive),
+                });
+                std.process.exit(1);
+            }
+        }
+    }
+}
+
+fn makeZip(allocator: std.mem.Allocator, zip_path: [:0]const u8, input_dir: []const u8) !void {
+    var errorp: c_int = undefined;
+    const archive: *c.zip_t = c.zip_open(zip_path, c.ZIP_CREATE | c.ZIP_TRUNCATE, &errorp) orelse {
+        var ziperror: c.zip_error_t = undefined;
+        c.zip_error_init_with_code(&ziperror, errorp);
+        std.log.err("Failed to open output file {s}: {s}", .{
+            zip_path,
+            c.zip_error_strerror(&ziperror),
+        });
+        std.process.exit(1);
+    };
+    defer _ = c.zip_close(archive);
+
+    try walkDirZip(archive, allocator, input_dir.len + 1, input_dir);
+}
+
+var push_ignored_files: std.StringHashMapUnmanaged(void) = .{};
+var push_keep_hidden = false;
+var push_dry_run = false;
+
+pub fn push(nk: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.ArgIterator) !void {
+    defer push_ignored_files.deinit(allocator);
+
+    var path: ?[]const u8 = null;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--ignore")) {
+            const filename = args.next() orelse {
+                std.log.err("missing argument for --ignore", .{});
+                std.process.exit(1);
+            };
+            try push_ignored_files.put(allocator, filename, {});
+        } else if (std.mem.eql(u8, arg, "--keep-hidden")) {
+            push_keep_hidden = true;
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            push_dry_run = true;
+        } else {
+            path = arg;
+        }
+    }
+
+    const cache = (try known_folders.getPath(allocator, .cache)).?;
+    defer allocator.free(cache);
+    const fmt = if (builtin.os.tag == .windows) "{s}\\nekoweb.zip" else "{s}/nekoweb.zip";
+    const zip_path = try std.fmt.allocPrintZ(allocator, fmt, .{cache});
+    try makeZip(allocator, zip_path, path orelse {
+        std.log.err("No directory specified", .{});
+        std.process.exit(1);
+    });
+    defer allocator.free(zip_path);
+
+    if (!push_dry_run) {
+        const response = try uploadBig(nk, zip_path, null);
+        defer response.deinit();
+
+        if (response.status != .ok) {
+            std.log.err("Failed to import the zip archive: {s} ({s})", .{
+                response.body,
+                @tagName(response.status),
+            });
+            std.process.exit(1);
+        } else {
+            std.log.info("Uploaded all files successfully: {s}", .{response.body});
+        }
+    }
 }
 
 fn formatUnsigned(dest: []u8, number: anytype) []u8 {
@@ -339,6 +483,27 @@ fn create(nk: *Nekoweb, args: *std.process.ArgIterator) !void {
     }
 }
 
+fn uploadBig(nk: *Nekoweb, filename: []const u8, destname: ?[]const u8) !Nekoweb.Response(null) {
+    var create_response = try nk.bigCreate();
+    if (create_response.status != .ok) {
+        return .{ .status = create_response.status, .body = try create_response.body.message.toOwnedSlice(), .allocator = create_response.body.message.allocator };
+    }
+    defer create_response.deinit();
+    const id = create_response.body.json.value.id;
+
+    const upload_response = try nk.bigUpload(id, filename);
+    if (upload_response.status != .ok) {
+        return upload_response;
+    }
+    defer upload_response.deinit();
+
+    if (std.mem.endsWith(u8, filename, ".zip")) {
+        return nk.import(id);
+    } else {
+        return nk.bigMove(id, destname.?);
+    }
+}
+
 fn upload(nk: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.ArgIterator) !void {
     var filenames = std.ArrayList([]const u8).init(allocator);
     defer filenames.deinit();
@@ -371,36 +536,7 @@ fn upload(nk: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.ArgIter
 
         const response = if (stat.size > Nekoweb.max_file_size) blk: {
             std.log.warn("'{s}' is a big file ({d}B)", .{ filename, stat.size });
-
-            const create_response = try nk.bigCreate();
-            defer create_response.deinit();
-            if (create_response.status != .ok) {
-                std.log.err("Failed to create a new big file: {s} ({s})", .{
-                    create_response.body.message.items,
-                    @tagName(create_response.status),
-                });
-                continue;
-            }
-            const id = create_response.body.json.value.id;
-
-            const upload_response = try nk.bigUpload(id, filename);
-            defer upload_response.deinit();
-            if (upload_response.status != .ok) {
-                std.log.err("Failed to upload big file '{s}': {s} ({s})", .{
-                    filename,
-                    upload_response.body,
-                    @tagName(upload_response.status),
-                });
-                continue;
-            }
-
-            if (std.mem.endsWith(u8, filename, ".zip")) {
-                std.log.info("'{s}' is a zip file, importing content ...", .{filename});
-                std.time.sleep(2 * std.time.ns_per_s);
-                break :blk try nk.import(id);
-            } else {
-                break :blk try nk.bigMove(id, destname);
-            }
+            break :blk try uploadBig(nk, filename, destname);
         } else blk: {
             break :blk try nk.upload(&[_][]const u8{filename}, destname);
         };
@@ -568,7 +704,9 @@ fn logout(allocator: std.mem.Allocator) !void {
 fn help(command: ?[]const u8) !void {
     const stderr = std.io.getStdErr().writer();
     if (command) |cmd| {
-        if (std.mem.eql(u8, cmd, "info")) {
+        if (std.mem.eql(u8, cmd, "push")) {
+            try stderr.print(usage_push, .{progname});
+        } else if (std.mem.eql(u8, cmd, "info")) {
             try stderr.print(usage_info, .{progname});
         } else if (std.mem.eql(u8, cmd, "create")) {
             try stderr.print(usage_create, .{progname});
@@ -596,7 +734,9 @@ fn help(command: ?[]const u8) !void {
 }
 
 pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{
+        .backing_allocator = std.heap.c_allocator,
+    };
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
@@ -614,7 +754,9 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    if (std.mem.eql(u8, command, "info")) {
+    if (std.mem.eql(u8, command, "push")) {
+        try push(&nk, allocator, &args);
+    } else if (std.mem.eql(u8, command, "info")) {
         try info(&nk, allocator, args.next());
     } else if (std.mem.eql(u8, command, "create")) {
         try create(&nk, &args);
