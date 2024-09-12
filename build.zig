@@ -4,17 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const nekoweb = b.addModule("nekoweb", .{
-        .root_source_file = b.path("lib/Nekoweb.zig"),
-    });
-
+    const known_folders = b.dependency("known-folders", .{}).module("known-folders");
     const exe = b.addExecutable(.{
         .name = "nekoweb",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("Nekoweb", nekoweb);
+    exe.root_module.addImport("known-folders", known_folders);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -24,15 +21,6 @@ pub fn build(b: *std.Build) void {
     }
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
-
-    const lib_tests = b.addTest(.{
-        .root_source_file = b.path("lib/Nekoweb.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const run_tests = b.addRunArtifact(lib_tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_tests.step);
 
     const release = b.step("release", "Make an upstream binary release");
     const release_targets: []const std.Target.Query = &.{
@@ -50,7 +38,7 @@ pub fn build(b: *std.Build) void {
             .strip = true,
         });
 
-        rel_exe.root_module.addImport("Nekoweb", nekoweb);
+        rel_exe.root_module.addImport("known-folders", known_folders);
         const install = b.addInstallArtifact(rel_exe, .{});
         install.dest_dir = .prefix;
         install.dest_sub_path = b.fmt("{s}-{s}", .{
@@ -62,7 +50,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const fmt_step = b.step("fmt", "Format all source files");
-    fmt_step.dependOn(&b.addFmt(.{ .paths = &.{ "build.zig", "src", "lib" } }).step);
+    fmt_step.dependOn(&b.addFmt(.{ .paths = &.{ "build.zig", "src" } }).step);
 
     const clean_step = b.step("clean", "Remove build artifacts");
     clean_step.dependOn(&b.addRemoveDirTree(".zig-cache").step);

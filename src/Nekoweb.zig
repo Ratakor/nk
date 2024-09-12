@@ -3,6 +3,8 @@ const Nekoweb = @This();
 
 const api_url = "https://nekoweb.org/api";
 const boundary = "x------------xXx--------------x";
+pub const api_key_len = 64;
+pub const max_file_size = 100 * 1000 * 1000;
 
 api_key: []const u8,
 client: std.http.Client,
@@ -28,8 +30,8 @@ pub const Info = struct {
     updates: u32,
     followers: u32,
     views: u32,
-    created_at: i64,
-    updated_at: i64,
+    created_at: u64, // epoch in milliseconds
+    updated_at: u64, // epoch in milliseconds
 };
 
 pub const ReadFolder = []const struct {
@@ -41,7 +43,7 @@ pub const BigCreate = struct {
     id: []const u8,
 };
 
-fn Response(comptime Type: ?type) type {
+pub fn Response(comptime Type: ?type) type {
     if (Type) |T| {
         return struct {
             status: std.http.Status,
@@ -52,17 +54,19 @@ fn Response(comptime Type: ?type) type {
 
             pub fn deinit(self: @This()) void {
                 switch (self.body) {
-                    .json, .message => |body| body.deinit(),
+                    .json => |json| json.deinit(),
+                    .message => |msg| msg.deinit(),
                 }
             }
         };
     } else {
         return struct {
             status: std.http.Status,
-            body: std.ArrayList(u8),
+            body: []const u8,
+            allocator: std.mem.Allocator,
 
             pub fn deinit(self: @This()) void {
-                self.body.deinit();
+                self.allocator.free(self.body);
             }
         };
     }
@@ -143,7 +147,8 @@ pub fn create(self: *Nekoweb, pathname: []const u8, is_folder: bool) !Response(n
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }
 
@@ -167,7 +172,7 @@ pub fn upload(self: *Nekoweb, filenames: []const []const u8, destname: []const u
         try payload_builder.appendSlice("\"\r\n\r\n");
         const file = try cwd.openFile(filename, .{});
         defer file.close();
-        try file.reader().readAllArrayList(&payload_builder, 100 * 1024 * 1024);
+        try file.reader().readAllArrayList(&payload_builder, max_file_size);
         try payload_builder.appendSlice("\r\n--" ++ boundary);
     }
     try payload_builder.appendSlice("--\r\n");
@@ -187,7 +192,8 @@ pub fn upload(self: *Nekoweb, filenames: []const []const u8, destname: []const u
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }
 
@@ -212,7 +218,8 @@ pub fn delete(self: *Nekoweb, pathname: []const u8) !Response(null) {
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }
 
@@ -241,7 +248,8 @@ pub fn rename(self: *Nekoweb, pathname: []const u8, new_pathname: []const u8) !R
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }
 
@@ -273,7 +281,8 @@ pub fn edit(self: *Nekoweb, pathname: []const u8, content: []const u8) !Response
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }
 
@@ -348,37 +357,64 @@ pub fn bigCreate(self: *Nekoweb) !Response(BigCreate) {
     }
 }
 
-/// Append a chunk to a big file upload. Chunk must be less than 100MB.
-pub fn bigAppend(self: *Nekoweb, id: []const u8, chunk: []const u8) !Response(null) {
-    std.debug.assert(chunk.len < 100 * 1024 * 1024);
+/// Upload a big file. Allows to upload files larger than 100MB.
+/// Make sure to call bigMove() or import() after this
+pub fn bigUpload(self: *Nekoweb, id: []const u8, filename: []const u8) !Response(null) {
+    const file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
 
-    const url = api_url ++ "/files/big/append";
-    var payload_builder = std.ArrayList(u8).init(self.allocator);
+    var payload_builder = try std.ArrayList(u8).initCapacity(self.allocator, max_file_size + 4096);
     defer payload_builder.deinit();
-    try payload_builder.appendSlice("--" ++ boundary ++ "\r\n");
-    try payload_builder.appendSlice("Content-Disposition: form-data; name=\"id\"\r\n\r\n");
-    try payload_builder.appendSlice(id);
-    try payload_builder.appendSlice("\r\n--" ++ boundary ++ "\r\n");
-    try payload_builder.appendSlice("Content-Disposition: form-data; name=\"file\"\r\n\r\n");
-    try payload_builder.appendSlice(chunk);
-    try payload_builder.appendSlice("\r\n--" ++ boundary ++ "--\r\n");
-    var response = std.ArrayList(u8).init(self.allocator);
-    errdefer response.deinit();
+    var done = false;
+    while (!done) {
+        const url = api_url ++ "/files/big/append";
+        payload_builder.clearRetainingCapacity();
+        payload_builder.appendSliceAssumeCapacity("--" ++ boundary ++ "\r\n");
+        payload_builder.appendSliceAssumeCapacity("Content-Disposition: form-data; name=\"id\"\r\n\r\n");
+        payload_builder.appendSliceAssumeCapacity(id);
+        payload_builder.appendSliceAssumeCapacity("\r\n--" ++ boundary ++ "\r\n");
+        payload_builder.appendSliceAssumeCapacity("Content-Disposition: form-data; name=\"file\"; filename=\"");
+        payload_builder.appendSliceAssumeCapacity(filename);
+        payload_builder.appendSliceAssumeCapacity("\"\r\n\r\n");
 
-    const result = try self.client.fetch(.{
-        .method = .POST,
-        .payload = payload_builder.items,
-        .headers = .{
-            .authorization = .{ .override = self.api_key },
-            .content_type = .{ .override = "multipart/form-data; boundary=" ++ boundary },
-        },
-        .response_storage = .{ .dynamic = &response },
-        .location = .{ .url = url },
-    });
+        const original_len = payload_builder.items.len;
+        payload_builder.items.len = original_len + max_file_size - 1;
+        const dest_slice = payload_builder.items[original_len..];
+        const bytes_read = try file.readAll(dest_slice);
+        if (bytes_read != dest_slice.len) {
+            payload_builder.shrinkRetainingCapacity(original_len + bytes_read);
+            done = true;
+        }
+        payload_builder.appendSliceAssumeCapacity("\r\n--" ++ boundary ++ "--\r\n");
+        var response = std.ArrayList(u8).init(self.allocator);
+        errdefer response.deinit();
+
+        const result = try self.client.fetch(.{
+            .method = .POST,
+            .payload = payload_builder.items,
+            .headers = .{
+                .authorization = .{ .override = self.api_key },
+                .content_type = .{ .override = "multipart/form-data; boundary=" ++ boundary },
+            },
+            .response_storage = .{ .dynamic = &response },
+            .location = .{ .url = url },
+        });
+
+        if (result.status != .ok) {
+            return .{
+                .status = result.status,
+                .body = try response.toOwnedSlice(),
+                .allocator = self.allocator,
+            };
+        } else {
+            response.deinit();
+        }
+    }
 
     return .{
-        .status = result.status,
-        .body = response,
+        .status = .ok,
+        .body = try self.allocator.dupe(u8, "Uploaded"),
+        .allocator = self.allocator,
     };
 }
 
@@ -406,7 +442,8 @@ pub fn bigMove(self: *Nekoweb, id: []const u8, pathname: []const u8) !Response(n
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }
 
@@ -434,6 +471,7 @@ pub fn import(self: *Nekoweb, big_id: []const u8) !Response(null) {
 
     return .{
         .status = result.status,
-        .body = response,
+        .body = try response.toOwnedSlice(),
+        .allocator = self.allocator,
     };
 }

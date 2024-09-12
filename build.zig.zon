@@ -1,12 +1,17 @@
 .{
     .name = "nekoweb",
-    .version = "0.1.0",
+    .version = "0.0.0",
     .minimum_zig_version = "0.13.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .@"known-folders" = .{
+            .url = "git+https://github.com/ziglibs/known-folders.git#1cceeb70e77dec941a4178160ff6c8d05a74de6f",
+            .hash = "12205f5e7505c96573f6fc5144592ec38942fb0a326d692f9cddc0c7dd38f9028f29",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "lib/Nekoweb.zig",
+        "src",
         "LICENSE",
     },
 }
