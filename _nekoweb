@@ -25,7 +25,9 @@ _nekoweb() {
             _arguments -s "*:file:(($server_files))"
             ;;
         move)
-            _arguments -s '2:oldpath:_files' '3:newpath:_files'
+            local server_files
+            IFS=$'\n' server_files=($(nekoweb list --no-color 2>/dev/null))
+            _arguments -s "2:oldpath:(($server_files))" "3:newpath:(($server_files))"
             ;;
         list)
             local server_directories
