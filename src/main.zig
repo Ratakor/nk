@@ -166,14 +166,6 @@ fn coloredLog(
 }
 
 fn getApiKey(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.process.getEnvVarOwned(allocator, "NEKOWEB_API_KEY")) |api_key| {
-        return api_key;
-    } else |err| {
-        if (err != error.EnvironmentVariableNotFound) {
-            return err;
-        }
-    }
-
     var config_dir = try known_folders.open(allocator, .local_configuration, .{}) orelse {
         std.log.err("Failed to open the configuration directory", .{});
         std.process.exit(1);
