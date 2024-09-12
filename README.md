@@ -1,33 +1,33 @@
-# nekoweb
-nekoweb is a CLI for [Nekoweb](https://nekoweb.org) using its [API](https://nekoweb.org/api).
+# nk
+nk is a CLI for [Nekoweb](https://nekoweb.org) using its [API](https://nekoweb.org/api).
 
 ## Installation
 
-### [AUR](https://aur.archlinux.org/packages/nekoweb-bin) (Arch Linux)
+### [AUR](https://aur.archlinux.org/packages/nk-bin) (Arch Linux)
 
 ```
-git clone https://aur.archlinux.org/nekoweb-bin.git
-cd nekoweb-bin
+git clone https://aur.archlinux.org/nk-bin.git
+cd nk-bin
 makepkg -si
 ```
 
 ### Manual Installation
 
-Grab one of the [release](https://github.com/Ratakor/nekoweb/releases)
-according to your system. Zsh completions are available [here](_nekoweb).
+Grab one of the [release](https://github.com/Ratakor/nk/releases)
+according to your system. Zsh completions are available [here](_nk).
 
 ### Building
 
 Requires zig 0.13.0.
 ```
-git clone https://github.com/ratakor/nekoweb
-cd nekoweb
+git clone https://github.com/ratakor/nk
+cd nk
 zig build -Doptimize=ReleaseSafe
 ```
 
 ## Usage
 ```
-Usage: nekoweb [command] [options]
+Usage: nk [command] [options]
 
 Commands:
   info       | Display information about a Nekoweb website

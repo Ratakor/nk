@@ -9,7 +9,7 @@ pub const std_options: std.Options = .{
 };
 
 const version = "0.1.0";
-const config_dirname = "nekoweb";
+const config_dirname = "nk";
 const config_filename = "config";
 const config_path = switch (builtin.os.tag) {
     .windows => config_dirname ++ "\\" ++ config_filename,
@@ -266,8 +266,8 @@ fn formatTime(dest: []u8, epoch: u64) []u8 {
     }) catch unreachable;
 }
 
-fn info(nekoweb: *Nekoweb, allocator: std.mem.Allocator, username: ?[]const u8) !void {
-    const response = try nekoweb.info(username);
+fn info(nk: *Nekoweb, allocator: std.mem.Allocator, username: ?[]const u8) !void {
+    const response = try nk.info(username);
     defer response.deinit();
 
     if (response.status != .ok) {
@@ -305,7 +305,7 @@ fn info(nekoweb: *Nekoweb, allocator: std.mem.Allocator, username: ?[]const u8) 
     });
 }
 
-fn create(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
+fn create(nk: *Nekoweb, args: *std.process.ArgIterator) !void {
     var is_dir = false;
     var pathname: ?[]const u8 = null;
     while (args.next()) |arg| {
@@ -320,7 +320,7 @@ fn create(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
     }
 
     if (pathname) |name| {
-        const response = try nekoweb.create(name, is_dir);
+        const response = try nk.create(name, is_dir);
         defer response.deinit();
 
         if (response.status != .ok) {
@@ -339,7 +339,7 @@ fn create(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
     }
 }
 
-fn upload(nekoweb: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.ArgIterator) !void {
+fn upload(nk: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.ArgIterator) !void {
     var filenames = std.ArrayList([]const u8).init(allocator);
     defer filenames.deinit();
     while (args.next()) |arg| {
@@ -372,7 +372,7 @@ fn upload(nekoweb: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.Ar
         const response = if (stat.size > Nekoweb.max_file_size) blk: {
             std.log.warn("'{s}' is a big file ({d}B)", .{ filename, stat.size });
 
-            const create_response = try nekoweb.bigCreate();
+            const create_response = try nk.bigCreate();
             defer create_response.deinit();
             if (create_response.status != .ok) {
                 std.log.err("Failed to create a new big file: {s} ({s})", .{
@@ -383,7 +383,7 @@ fn upload(nekoweb: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.Ar
             }
             const id = create_response.body.json.value.id;
 
-            const upload_response = try nekoweb.bigUpload(id, filename);
+            const upload_response = try nk.bigUpload(id, filename);
             defer upload_response.deinit();
             if (upload_response.status != .ok) {
                 std.log.err("Failed to upload big file '{s}': {s} ({s})", .{
@@ -397,12 +397,12 @@ fn upload(nekoweb: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.Ar
             if (std.mem.endsWith(u8, filename, ".zip")) {
                 std.log.info("'{s}' is a zip file, importing content ...", .{filename});
                 std.time.sleep(2 * std.time.ns_per_s);
-                break :blk try nekoweb.import(id);
+                break :blk try nk.import(id);
             } else {
-                break :blk try nekoweb.bigMove(id, destname);
+                break :blk try nk.bigMove(id, destname);
             }
         } else blk: {
-            break :blk try nekoweb.upload(&[_][]const u8{filename}, destname);
+            break :blk try nk.upload(&[_][]const u8{filename}, destname);
         };
         defer response.deinit();
 
@@ -421,9 +421,9 @@ fn upload(nekoweb: *Nekoweb, allocator: std.mem.Allocator, args: *std.process.Ar
     }
 }
 
-fn delete(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
+fn delete(nk: *Nekoweb, args: *std.process.ArgIterator) !void {
     while (args.next()) |pathname| {
-        const response = try nekoweb.delete(pathname);
+        const response = try nk.delete(pathname);
         defer response.deinit();
 
         if (response.status != .ok) {
@@ -439,7 +439,7 @@ fn delete(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
     }
 }
 
-fn move(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
+fn move(nk: *Nekoweb, args: *std.process.ArgIterator) !void {
     const src = args.next() orelse {
         std.log.err("No source specified", .{});
         std.process.exit(1);
@@ -449,7 +449,7 @@ fn move(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
         std.process.exit(1);
     };
 
-    const response = try nekoweb.rename(src, dest);
+    const response = try nk.rename(src, dest);
     defer response.deinit();
 
     if (response.status != .ok) {
@@ -465,13 +465,8 @@ fn move(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
     std.log.info("'{s}' has been moved to '{s}': {s}", .{ src, dest, response.body });
 }
 
-fn recursiveList(
-    nekoweb: *Nekoweb,
-    pathname: []const u8,
-    color: bool,
-    only_dir: bool,
-) !void {
-    const response = try nekoweb.readFolder(pathname);
+fn recursiveList(nk: *Nekoweb, pathname: []const u8, color: bool, only_dir: bool) !void {
+    const response = try nk.readFolder(pathname);
     defer response.deinit();
 
     if (response.status != .ok) {
@@ -496,7 +491,7 @@ fn recursiveList(
             }
             var buffer: [4096]u8 = undefined;
             try recursiveList(
-                nekoweb,
+                nk,
                 try std.fmt.bufPrint(&buffer, "{s}{s}/", .{ pathname, file.name }),
                 color,
                 only_dir,
@@ -507,7 +502,7 @@ fn recursiveList(
     }
 }
 
-fn list(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
+fn list(nk: *Nekoweb, args: *std.process.ArgIterator) !void {
     var pathname: []const u8 = "/";
     var recursive_root = true;
     var color = true;
@@ -524,10 +519,10 @@ fn list(nekoweb: *Nekoweb, args: *std.process.ArgIterator) !void {
     }
 
     if (recursive_root) {
-        return recursiveList(nekoweb, pathname, color, only_dir);
+        return recursiveList(nk, pathname, color, only_dir);
     }
 
-    const response = try nekoweb.readFolder(pathname);
+    const response = try nk.readFolder(pathname);
     defer response.deinit();
 
     if (response.status != .ok) {
@@ -611,8 +606,8 @@ pub fn main() !void {
 
     const api_key = try getApiKey(allocator);
     defer allocator.free(api_key);
-    var nekoweb = Nekoweb.init(allocator, api_key);
-    defer nekoweb.deinit();
+    var nk = Nekoweb.init(allocator, api_key);
+    defer nk.deinit();
 
     const command = args.next() orelse {
         try help(null);
@@ -620,17 +615,17 @@ pub fn main() !void {
     };
 
     if (std.mem.eql(u8, command, "info")) {
-        try info(&nekoweb, allocator, args.next());
+        try info(&nk, allocator, args.next());
     } else if (std.mem.eql(u8, command, "create")) {
-        try create(&nekoweb, &args);
+        try create(&nk, &args);
     } else if (std.mem.eql(u8, command, "upload")) {
-        try upload(&nekoweb, allocator, &args);
+        try upload(&nk, allocator, &args);
     } else if (std.mem.eql(u8, command, "delete")) {
-        try delete(&nekoweb, &args);
+        try delete(&nk, &args);
     } else if (std.mem.eql(u8, command, "move")) {
-        try move(&nekoweb, &args);
+        try move(&nk, &args);
     } else if (std.mem.eql(u8, command, "list")) {
-        try list(&nekoweb, &args);
+        try list(&nk, &args);
     } else if (std.mem.eql(u8, command, "logout")) {
         try logout(allocator);
     } else if (std.mem.eql(u8, command, "help")) {

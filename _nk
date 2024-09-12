@@ -1,5 +1,5 @@
-#compdef nekoweb
-_nekoweb() {
+#compdef nk
+_nk() {
     local state line
     _arguments -s \
         '1: :->cmd' \
@@ -21,17 +21,17 @@ _nekoweb() {
             ;;
         delete)
             local server_files
-            IFS=$'\n' server_files=($(nekoweb list --no-color 2>/dev/null))
+            IFS=$'\n' server_files=($(nk list --no-color 2>/dev/null))
             _arguments -s "*:file:(($server_files))"
             ;;
         move)
             local server_files
-            IFS=$'\n' server_files=($(nekoweb list --no-color 2>/dev/null))
+            IFS=$'\n' server_files=($(nk list --no-color 2>/dev/null))
             _arguments -s "2:oldpath:(($server_files))" "3:newpath:(($server_files))"
             ;;
         list)
             local server_directories
-            IFS=$'\n' server_directories=($(nekoweb list --no-color --only-dir 2>/dev/null))
+            IFS=$'\n' server_directories=($(nk list --no-color --only-dir 2>/dev/null))
             _arguments -s \
                 "2:directory:(($server_directories))" \
                 "--no-color[Disable color output]" \

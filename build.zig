@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
 
     const known_folders = b.dependency("known-folders", .{}).module("known-folders");
     const exe = b.addExecutable(.{
-        .name = "nekoweb",
+        .name = "nk",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
     };
     for (release_targets) |target_query| {
         const rel_exe = b.addExecutable(.{
-            .name = "nekoweb",
+            .name = "nk",
             .root_source_file = b.path("src/main.zig"),
             .target = b.resolveTargetQuery(target_query),
             .optimize = .ReleaseSafe,
